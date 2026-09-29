@@ -97,3 +97,55 @@ export function independentEntry(O: Vec, C: Vec, verts: Vec[], ctr: Vec): Frac |
 export function independentCellEntry(O: Vec, C: Vec, cell: Axial): Frac | null {
   return independentEntry(O, C, verticesOf(cell), centerOf(cell));
 }
+
+/**
+ * 高度视线的独立判定：阻挡物是六边形截面 × [0, H] 的竖直柱体，
+ * 视线高度 h(t) = oe + t·(te − oe)。收集六条边所在直线与柱顶平面
+ * h(t) = H 的全部临界参数，连同 0、1 排序去重；对每个开子区间取中点，
+ * 同时检验“严格在六边形内部”与“严格低于柱顶”，返回首个满足区间的下界。
+ * 与主实现的区间裁剪算法完全不同，且不共享任何高度相关代码。
+ */
+export function independentColumnEntry(
+  O: Vec,
+  C: Vec,
+  cell: Axial,
+  height: bigint,
+  oe: bigint,
+  te: bigint,
+  scale = 1,
+): Frac | null {
+  const verts = verticesOf(cell, scale);
+  const ctr = centerOf(cell, scale);
+  const D = vsub(C, O);
+  const crit: Frac[] = [frac(0n), frac(1n)];
+  for (let i = 0; i < verts.length; i++) {
+    const a = verts[i];
+    const b = verts[(i + 1) % verts.length];
+    const e = vsub(b, a);
+    const c0 = cross(e, vsub(O, a));
+    const c1 = cross(e, D);
+    if (c1 !== 0n) crit.push(frac(-c0, c1));
+  }
+  // 柱顶交点 h(t) = H ⇔ oe + t·(te − oe) = H
+  if (te !== oe) crit.push(frac(height - oe, te - oe));
+  crit.sort(cmpFrac);
+  const ts: Frac[] = [];
+  for (const t of crit) {
+    if (ts.length === 0 || cmpFrac(ts[ts.length - 1], t) !== 0) ts.push(t);
+  }
+  const zero = frac(0n);
+  const one = frac(1n);
+  for (let i = 0; i + 1 < ts.length; i++) {
+    const lo = cmpFrac(ts[i], zero) > 0 ? ts[i] : zero;
+    const hi = cmpFrac(ts[i + 1], one) < 0 ? ts[i + 1] : one;
+    if (cmpFrac(lo, hi) >= 0) continue;
+    const mid = mulF(addF(lo, hi), frac(1n, 2n));
+    const px = addF(frac(O.x), mulF(mid, frac(D.x)));
+    const py = addF(frac(O.y), mulF(mid, frac(D.y)));
+    if (!strictlyInside(px, py, verts, ctr)) continue;
+    // h(mid) < H ⇔ oe·d + n·(te − oe) < H·d
+    const hn = oe * mid[1] + mid[0] * (te - oe);
+    if (hn < height * mid[1]) return lo;
+  }
+  return null;
+}

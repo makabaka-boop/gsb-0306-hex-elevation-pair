@@ -16,11 +16,11 @@ export interface BlockHit {
 }
 
 /**
- * 开线段 (O, O+D) 进入六边形严格内部的参数 t ∈ [0, 1)。
- * 纯边界接触（擦角、沿边）不算遮挡，返回 null。
+ * 开线段 (O, O+D) 与六边形严格内部的相交参数开区间 (lo, hi)。
+ * 纯边界接触（擦角、沿边）时区间为空，返回 null。
  * 全程用整数交叉相乘比较，不做任何浮点运算。
  */
-export function hexEntry(O: IPoint, D: IPoint, planes: HalfPlane[]): Rat | null {
+export function hexSpan(O: IPoint, D: IPoint, planes: HalfPlane[]): { lo: Rat; hi: Rat } | null {
   let ln = 0n;
   let ld = 1n; // 下界 lo = ln / ld（ld > 0），初值 0（开线段起点）
   let hn = 1n;
@@ -54,7 +54,62 @@ export function hexEntry(O: IPoint, D: IPoint, planes: HalfPlane[]): Rat | null 
     }
     if (ln * hd >= hn * ld) return null; // 开区间 (lo, hi) 已为空
   }
-  return Rat.of(ln, ld);
+  return { lo: Rat.of(ln, ld), hi: Rat.of(hn, hd) };
+}
+
+/**
+ * 开线段 (O, O+D) 进入六边形严格内部的参数 t ∈ [0, 1)。
+ * 纯边界接触（擦角、沿边）不算遮挡，返回 null。
+ */
+export function hexEntry(O: IPoint, D: IPoint, planes: HalfPlane[]): Rat | null {
+  return hexSpan(O, D, planes)?.lo ?? null;
+}
+
+/** 比较视线在 t 处的高度与柱顶高度：严格低于柱顶才算在柱内。 */
+function belowTop(t: Rat, observerEye: bigint, targetEye: bigint, height: bigint): boolean {
+  // h(t) = observerEye·d + n·(targetEye − observerEye)  （公分母 t.d）
+  const h = observerEye * t.d + t.n * (targetEye - observerEye);
+  return h < height * t.d;
+}
+
+/**
+ * 视线与竖直柱体（六边形截面 × [0, 柱顶]）的第一次相交参数。
+ * 视线高度沿开线段线性变化：h(t) = observerEye + t·(targetEye − observerEye)。
+ * 只有“在六边形严格内部且严格低于柱顶”的部分才算遮挡：
+ * 擦六边形边界（span 为 null）、恰好贴柱顶滑过、柱高 0 均不遮挡。
+ * 俯视进入时先在柱顶上空，交点落在柱顶平面，t 由 h(t) = height 精确解出。
+ */
+export function columnEntry(
+  O: IPoint,
+  D: IPoint,
+  planes: HalfPlane[],
+  height: number,
+  observerEye: number,
+  targetEye: number,
+): Rat | null {
+  const span = hexSpan(O, D, planes);
+  if (span === null) return null;
+  const H = BigInt(height);
+  const oe = BigInt(observerEye);
+  const te = BigInt(targetEye);
+  if (H <= 0n) return null; // 高度 0 的格子不遮挡
+
+  if (te === oe) {
+    // 视线水平：全程同高，严格低于柱顶时在入六边形点 lo 处首次相交。
+    return oe < H ? span.lo : null;
+  }
+  if (te > oe) {
+    // 仰视：高度单调上升。入六边形即低于柱顶才遮挡；
+    // h(lo) 恰为柱顶时，此后全程在柱顶之上（仅触顶），不遮挡。
+    return belowTop(span.lo, oe, te, H) ? span.lo : null;
+  }
+  // 俯视：高度单调下降。出六边形前严格低于柱顶才遮挡；
+  // h(hi) 恰为柱顶时，内部全程高于柱顶（仅在边界触顶），不遮挡。
+  if (!belowTop(span.hi, oe, te, H)) return null;
+  if (belowTop(span.lo, oe, te, H)) return span.lo;
+  // 入六边形时在柱顶之上：穿过柱顶平面 h(t) = H 进入柱内。
+  // t = (oe − H) / (oe − te)，两数均非负（H 介于 h(hi) 与 h(lo) 之间）。
+  return Rat.of(oe - H, oe - te);
 }
 
 /** 线段上参数 t 处的有理点。 */
@@ -96,18 +151,26 @@ export interface HeightProfile {
 
 /**
  * 整盘可见性：对每个目标格，求观察点格心到目标格心的开线段
- * 穿过了哪些阻挡六边形的内部。画布与列表共用这一份结果。
+ * 穿过了哪些阻挡柱体的内部。画布与列表共用这一份结果。
+ *
+ * 提供 heights 时按高度视线判定（柱高 0 不遮挡，视线可越过矮柱，
+ * 俯视时交点在柱顶平面）；省略时退化为无限高墙的纯平面判定，
+ * 供既有平面几何用例与对拍使用。
  */
 export function computeBoard(
   radius: number,
   observer: Axial,
   blockers: readonly Axial[],
   scale = 1,
-  _heights?: HeightProfile,
+  heights?: HeightProfile,
 ): BoardResult {
   const cells = boardCells(radius);
   const O = centerOf(observer, scale);
-  const data = blockers.map((cell) => ({ cell, planes: halfPlanesOf(cell, scale) }));
+  const data = blockers.map((cell) => ({
+    cell,
+    planes: halfPlanesOf(cell, scale),
+    height: heights?.blockerHeights.get(keyOf(cell)) ?? 4,
+  }));
   const verdicts = new Map<string, CellVerdict>();
   for (const target of cells) {
     const key = keyOf(target);
@@ -117,9 +180,13 @@ export function computeBoard(
     }
     const C = centerOf(target, scale);
     const D: IPoint = { x: C.x - O.x, y: C.y - O.y };
+    const oe = heights?.observerEye ?? 0;
+    const te = heights?.targetEye ?? 0;
     const hits: BlockHit[] = [];
-    for (const { cell, planes } of data) {
-      const t = hexEntry(O, D, planes);
+    for (const { cell, planes, height } of data) {
+      const t = heights
+        ? columnEntry(O, D, planes, height, oe, te)
+        : hexEntry(O, D, planes);
       if (t !== null) hits.push({ cell, t, point: pointAt(O, D, t) });
     }
     hits.sort(compareHits);
