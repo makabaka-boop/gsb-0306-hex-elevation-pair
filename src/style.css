@@ -1,0 +1,51 @@
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family:
+    system-ui,
+    -apple-system,
+    'PingFang SC',
+    'Microsoft YaHei',
+    sans-serif;
+  background: #14171c;
+  color: #d7dde6;
+}
+
+#app {
+  height: 100vh;
+}
+
+button {
+  background: #262d37;
+  color: #d7dde6;
+  border: 1px solid #3a4150;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+button:hover {
+  border-color: #6b7a90;
+}
+
+button.on {
+  background: #2c4a6e;
+  border-color: #4d8fd1;
+}
+
+input[type='number'] {
+  width: 56px;
+  background: #14171c;
+  color: inherit;
+  border: 1px solid #3a4150;
+  border-radius: 4px;
+  padding: 3px 6px;
+}

@@ -1,0 +1,7 @@
+services:
+  hex:
+    build: .
+    image: hex-los:local
+    ports:
+      - "8080:80"
+    restart: unless-stopped
