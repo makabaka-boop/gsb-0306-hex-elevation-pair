@@ -37,8 +37,20 @@ export class Rat {
     return Rat.of(this.n * o.d + o.n * this.d, this.d * o.d);
   }
 
+  sub(o: Rat): Rat {
+    return Rat.of(this.n * o.d - o.n * this.d, this.d * o.d);
+  }
+
+  neg(): Rat {
+    return Rat.of(-this.n, this.d);
+  }
+
   mul(o: Rat): Rat {
     return Rat.of(this.n * o.n, this.d * o.d);
+  }
+
+  div(o: Rat): Rat {
+    return Rat.of(this.n * o.d, this.d * o.n);
   }
 
   cmp(o: Rat): number {

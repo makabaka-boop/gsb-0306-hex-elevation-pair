@@ -3,7 +3,7 @@ import { boardCells, centerOf, halfPlanesOf, keyOf } from '../src/geometry/hex';
 import type { Axial } from '../src/geometry/hex';
 import { Rat } from '../src/geometry/rational';
 import { compareHits, computeBoard, hexEntry } from '../src/geometry/visibility';
-import type { BlockHit, BoardResult, CellVerdict } from '../src/geometry/visibility';
+import type { BlockHit, BoardResult, CellVerdict, HeightProfile } from '../src/geometry/visibility';
 import { cmpFrac, independentCellEntry } from './independent';
 import type { Frac } from './independent';
 
@@ -120,6 +120,124 @@ describe('缩放不变性', () => {
           // 交入点随缩放线性放大，判定本身不变
           expect(b.hits[i].point.x.cmp(a.hits[i].point.x.mul(Rat.of(scale)))).toBe(0);
           expect(b.hits[i].point.y.cmp(a.hits[i].point.y.mul(Rat.of(scale)))).toBe(0);
+        }
+      }
+    }
+  });
+});
+
+describe('高度视线', () => {
+  const observer = A(0, 0);
+  const target = A(2, 0);
+  const middle = A(1, 0);
+  // 开线段 (0,0)→(4,0) 在 t=1/4 处进入 (1,0)，t=3/4 处离开，平面区间 (1/4, 3/4)。
+  const profile = (
+    blockerHeights: Record<string, number>,
+    observerEye: number,
+    targetEye: number,
+  ): HeightProfile => ({
+    observerEye,
+    targetEye,
+    blockerHeights: new Map(Object.entries(blockerHeights)),
+  });
+
+  it('中间格高度 0、两端眼高 8：视线可见且无命中', () => {
+    const board = computeBoard(4, observer, [middle], 1, profile({ '1,0': 0 }, 8, 8));
+    const v = verdict(board, target);
+    expect(v.visible).toBe(true);
+    expect(v.hits).toHaveLength(0);
+  });
+
+  it('同一格从 0 调到 8：两端眼高 8 时恰好触顶，不遮挡', () => {
+    const b0 = computeBoard(4, observer, [middle], 1, profile({ '1,0': 0 }, 8, 8));
+    const b8 = computeBoard(4, observer, [middle], 1, profile({ '1,0': 8 }, 8, 8));
+    expect(verdict(b0, target).hits).toHaveLength(0);
+    expect(verdict(b8, target).hits).toHaveLength(0);
+  });
+
+  it('同一格从 0 调到 4：两端眼高 8 时穿过柱体上方，高度变化不改变无遮挡结论', () => {
+    const b0 = computeBoard(4, observer, [middle], 1, profile({ '1,0': 0 }, 8, 8));
+    const b4 = computeBoard(4, observer, [middle], 1, profile({ '1,0': 4 }, 8, 8));
+    expect(verdict(b0, target).visible).toBe(true);
+    expect(verdict(b4, target).visible).toBe(true);
+  });
+
+  it('调低阻挡格高度使视线越过：可见性随高度恢复', () => {
+    // 两端眼高 1，柱高 4 必挡；柱高 0 不挡。
+    const blocked = computeBoard(4, observer, [middle], 1, profile({ '1,0': 4 }, 1, 1));
+    const cleared = computeBoard(4, observer, [middle], 1, profile({ '1,0': 0 }, 1, 1));
+    expect(verdict(blocked, target).visible).toBe(false);
+    expect(verdict(cleared, target).visible).toBe(true);
+  });
+
+  it('前方低矮格（高度 0）即使在前也不列为首个命中；只由后方高格命中', () => {
+    // 视线沿 x 轴：(1,0) 在前（平面入点 t=1/4），(3,0) 在后（入点 t=5/8）。
+    const board = computeBoard(
+      4,
+      observer,
+      [A(3, 0), A(1, 0)],
+      1,
+      profile({ '1,0': 0, '3,0': 4 }, 1, 1),
+    );
+    const v = verdict(board, A(4, 0));
+    expect(v.visible).toBe(false);
+    expect(v.hits.map((h) => h.cell)).toEqual([A(3, 0)]);
+    expect(v.first?.cell).toEqual(A(3, 0));
+    expect(v.first?.t.toString()).toBe('5/8');
+  });
+
+  it('前方柱顶恰被视线擦过（严格）不遮挡，更高才挡', () => {
+    // 眼高 0→8 线性爬升；在进入 (1,0) 的 t=1/4 处视线高 2。柱高恰为 2：
+    // 进入瞬间触顶，随后严格高于柱顶，全程不“严格低于柱顶”，不遮挡。
+    const graze = computeBoard(4, observer, [middle], 1, profile({ '1,0': 2 }, 0, 8));
+    expect(verdict(graze, target).hits).toHaveLength(0);
+    // 柱高 3：t<3/8 段低于柱顶，与平面区间相交，交入参数仍为平面入点 1/4。
+    const hit = computeBoard(4, observer, [middle], 1, profile({ '1,0': 3 }, 0, 8));
+    const v = verdict(hit, target);
+    expect(v.visible).toBe(false);
+    expect(v.first?.t.toString()).toBe('1/4');
+    expect(v.first?.point.x.toString()).toBe('1');
+  });
+
+  it('俯视（视线爬升越过柱顶）只在柱体前段遮挡，交入点为平面入点', () => {
+    // z(t)=0+8t，柱高 4：低于柱顶要求 t<1/2；平面区间 (1/4,3/4)，交 (1/4,1/2) 非空。
+    const board = computeBoard(4, observer, [middle], 1, profile({ '1,0': 4 }, 0, 8));
+    const v = verdict(board, target);
+    expect(v.visible).toBe(false);
+    expect(v.first?.cell).toEqual(middle);
+    expect(v.first?.t.toString()).toBe('1/4');
+    expect(v.first?.point.x.toString()).toBe('1');
+  });
+
+  it('仰视（视线下降）交入点按高度交点后移，给有理位置', () => {
+    // z(t)=8−8t，柱高 4：低于柱顶要求 t>1/2；平面区间 (1/4,3/4)，交 (1/2,3/4)。
+    const board = computeBoard(4, observer, [middle], 1, profile({ '1,0': 4 }, 8, 0));
+    const v = verdict(board, target);
+    expect(v.visible).toBe(false);
+    expect(v.first?.cell).toEqual(middle);
+    expect(v.first?.t.toString()).toBe('1/2');
+    expect(v.first?.point.x.toString()).toBe('2'); // (0,0)+(4,0)·1/2 = (2,0)
+    expect(v.first?.point.y.toString()).toBe('0');
+  });
+
+  it('仰视时视线始终高于柱顶则不遮挡（如全程贴柱顶或更高）', () => {
+    // 眼高 8→8 等高、柱高 8：整段触顶，严格低于柱顶不成立。
+    const touch = computeBoard(4, observer, [middle], 1, profile({ '1,0': 8 }, 8, 8));
+    expect(verdict(touch, target).hits).toHaveLength(0);
+  });
+
+  it('高度判定在缩放下保持一致（t 与可见性不变）', () => {
+    const hp = profile({ '1,0': 4, '3,0': 0 }, 8, 0);
+    const base = computeBoard(4, observer, [A(1, 0), A(3, 0)], 1, hp);
+    for (const scale of [2, 3, 7, 1000]) {
+      const scaled = computeBoard(4, observer, [A(1, 0), A(3, 0)], scale, hp);
+      for (const cell of base.cells) {
+        const a = verdict(base, cell);
+        const b = verdict(scaled, cell);
+        expect(b.visible).toBe(a.visible);
+        expect(b.hits.map((h) => keyOf(h.cell))).toEqual(a.hits.map((h) => keyOf(h.cell)));
+        for (let i = 0; i < a.hits.length; i++) {
+          expect(b.hits[i].t.cmp(a.hits[i].t)).toBe(0);
         }
       }
     }
